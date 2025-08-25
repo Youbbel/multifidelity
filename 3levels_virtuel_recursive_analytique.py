@@ -68,7 +68,7 @@ medium_cost = 2.0
 high_cost = 5.0
 
 # number of iterations
-num_steps=0
+num_steps=1
 
 #################################
 # fidelity model wrapper
@@ -202,8 +202,8 @@ class MultiFidelityModel(TrainableProbabilisticModel):
 
         self._low_fidelity_model.update(Dataset(lowfi_points, tf.gather(dataset.observations, ind_lowfi)))
 
-        low_virtual_query_points = tf.concat([lowfi_points, medfi_points],0)
-        low_virtual_observations = tf.concat([tf.gather(dataset.observations, ind_lowfi), self._low_fidelity_model.predict(medfi_points)[0]],0)
+        low_virtual_query_points = tf.concat([lowfi_points, medfi_points,highfi_points],0)
+        low_virtual_observations = tf.concat([tf.gather(dataset.observations, ind_lowfi), self._low_fidelity_model.predict(medfi_points)[0],self._low_fidelity_model.predict(highfi_points)[0]],0)
         self._virtual_low_fidelity_model.update(Dataset(low_virtual_query_points, low_virtual_observations))
 
 
@@ -551,12 +551,9 @@ initial_sample = tf.concat([initial_sample_low,initial_sample_medium,initial_sam
 
 initial_data = observer(initial_sample)
 num_fidelities=int(tf.reduce_max(initial_sample[:,-1]).numpy()+1)
-# print(f"#### DOE phase :")
-# print(f"level: {initial_sample[..., -1:]}")
-# print(f"x: \n {initial_sample[..., :-1]}")
-# print(f"observations : \n {initial_data.observations}")
-likelihood_value=1e-10
 
+
+likelihood_value=1e-10
 lowfi_points, medfi_points, highfi_points, lowfi_mask, medfi_mask, highfi_mask, ind_lowfi, ind_medfi, ind_highfi = filter_by_fidelity(initial_data.query_points)
 
 lf_data = Dataset(lowfi_points, tf.gather(initial_data.observations, ind_lowfi))#
@@ -565,8 +562,8 @@ low_fidelity_gpr = GaussianProcessRegression(build_gpr(lf_data, input_search_spa
 mf_data = Dataset(medfi_points, tf.gather(initial_data.observations, ind_medfi))#
 medium_fidelity_gpr = GaussianProcessRegression(build_gpr(mf_data, input_search_space,  likelihood_variance = likelihood_value, kernel_priors=True))
 
-low_virtual_query_points = tf.concat([lowfi_points,medfi_points],0)
-low_virtual_observations = tf.concat([tf.gather(initial_data.observations, ind_lowfi),low_fidelity_gpr.predict(medfi_points)[0]],0)
+low_virtual_query_points = tf.concat([lowfi_points,medfi_points,highfi_points],0)
+low_virtual_observations = tf.concat([tf.gather(initial_data.observations, ind_lowfi),low_fidelity_gpr.predict(medfi_points)[0],low_fidelity_gpr.predict(highfi_points)[0]],0)
 
 vlf_data = Dataset(low_virtual_query_points, low_virtual_observations)#
 virtual_low_fidelity_gpr = GaussianProcessRegression(build_gpr(vlf_data, input_search_space,  likelihood_variance = likelihood_value, kernel_priors=True))
