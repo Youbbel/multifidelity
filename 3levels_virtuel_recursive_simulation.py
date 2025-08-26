@@ -37,10 +37,12 @@ from trieste.data import split_dataset_by_fidelity
 
 from diogenes_optim import IO_files
 import os
+import sys
 import pickle
 from collections import deque
 import time
 
+os.chdir('/user/abellouc/home/Post-Doc/multi_fidelity/simulation/tree_fidelities/@local_3level_fidelities_v1')
 
 OBJECTIVE = "OBJECTIVE"
 
@@ -52,8 +54,14 @@ ProbabilisticModelType = TypeVar(
 # problem parameters
 #################################
 
+# subprocess.run("rm *.txt", shell=True)
+# subprocess.run("mkdir data", shell=True)
+
 # random seed
 my_seed = 35
+history_data=False # False per default
+counter = 0        # 0 per default
+best_value =10      # 10 >> 1 per default
 
 # pb dimension
 input_dim = 7
@@ -63,21 +71,18 @@ lb = np.array([90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0])
 ub = np.array([200.0, 200.0, 200.0, 200.0, 200.0, 200.0, 200.0])
 
 # size of initial dataset
-init_low = 40
-init_medium= 25
-init_high = 10
+init_low = 15
+init_medium=10
+init_high = 5
 
 # CPU costs
 low_cost = 1.0
 medium_cost = 2.0
-high_cost = 5.0
+high_cost = 4.0
 
 # number of iterations
-num_steps=250
+num_steps=10
 
-#Display options
-counter = 0
-initial_best_value =1
 
 
 #################################
@@ -503,49 +508,84 @@ def dgtd_simulator(x_input, fidelity):
         np.savetxt(f_out, x_input[i])
         f_out.close()
 
+        global counter
+        counter+=1
+
+        timelines = deque(maxlen=5)
         if fidelity[i] == 0:
+            if os.path.isfile("results_bf.txt"):
+                subprocess.run("rm results_bf.txt", shell=True)
             subprocess.run("./run_bf.sh | tee -a results_bf.txt", shell=True)
-            timelines = deque(maxlen=5)
+            subprocess.run(f"cp results_bf.txt observations/out_dgtd_id{counter}", shell=True)
             with open("results_bf.txt", 'r') as source:
                 for line in source:
                     timelines.append(line)  # Stocker uniquement les num_lines dernières lignes
-        
+
         elif fidelity[i] == 1:
+            if os.path.isfile("results_mf.txt"):
+                subprocess.run("rm results_mf.txt", shell=True)
             subprocess.run("./run_mf.sh | tee -a results_mf.txt", shell=True)
-            timelines = deque(maxlen=5)
+            subprocess.run(f"cp results_mf.txt observations/out_dgtd_id{counter}", shell=True)
             with open("results_mf.txt", 'r') as source:
                 for line in source:
                     timelines.append(line)  # Stocker uniquement les num_lines dernières lignes
-                
         else:
+            if os.path.isfile("results_hf.txt"):
+                subprocess.run("rm results_hf.txt", shell=True)
             subprocess.run("./run_hf.sh | tee -a results_hf.txt", shell=True)
-            timelines = deque(maxlen=5)
+            subprocess.run(f"cp results_hf.txt observations/out_dgtd_id{counter}", shell=True)
             with open("results_hf.txt", 'r') as source:
                 for line in source:
                     timelines.append(line)  # Stocker uniquement les num_lines dernières lignes
-            
-        value =1-read_data_pff("periodicFF_T_P2")
+
+
+        if timelines[4]=='Computation successful\n' : # Si la simulation est faite :
+            value =1-read_data_pff("periodicFF_T_P2")
+
+            subprocess.run(f"cp T_P2 observations/T_P2_id{counter}", shell=True)
+            subprocess.run(f"cp R_P2 observations/R_P2_id{counter}", shell=True)
+        else :
+            value=1.0001 #Penalisation:
+            timelines[0]= 'Wall time     :     no time \n'
+            timelines[3]= 'Wall time     :     no time \n'
+
         sim_values[i] = value #float(line3)
 
-                # Display data in "observation.txt" :
-        global counter
-        global initial_best_value
-        counter+=1
-        initial_best_value=min(value,initial_best_value)
+        ## Post-Processing :
 
+        #------------------ Save Data :------------------
+
+        x=tf.concat([x_input[:i+1],fidelity[:i+1]],1)
+        obs=sim_values[:i+1,None]
+
+        if size==1 : # If EGO phase : concatenate with datas DOE+EGO
+            filename = "data/data.pickle"+str(counter-1)
+            with open(filename, 'rb') as file:
+                dataset = pickle.load(file)
+            x=tf.concat([dataset.query_points,x],0)
+            obs=tf.concat([dataset.observations,obs],0)
+
+        filename = "data/data.pickle"+str(counter)
+        with open(filename, 'wb') as file :
+            pickle.dump(trieste.data.Dataset(x, obs), file)
+
+
+        #------------------ Display Data in "observation.txt" :-------
+        global best_value
+        best_value=min(value,best_value)
         f_out = open("observation.txt", "a")
-        if size!=1 :
-            f_out.write("Iteration (DOE):" +str(counter))
-        else :
+        if size==1 :
             f_out.write("Iteration (EGO) :" +str(counter))
+        else :
+            f_out.write("Iteration (DOE):" +str(counter))
         f_out.write("\n")
-        f_out.write("Fidelity :" +str(fidelity[i].numpy()[0]))
+        f_out.write("Fidelity : " +str(fidelity[i].numpy()[0]))
         f_out.write("\n")
         f_out.write(str(x_input[i].numpy())[1:-1])
         f_out.write("\n")
         f_out.write("Objective value :"+str(value))
         f_out.write("\n")
-        f_out.write("Best value :"+str(initial_best_value))
+        f_out.write("Best value :"+str(best_value))
         f_out.write("\n")
         f_out.writelines(timelines[0])
         f_out.writelines(timelines[3])
@@ -561,7 +601,6 @@ def observer(x):
     # note: this assumes that my_simulator broadcasts, i.e. accept matrix inputs.
     # If not you need to replace this by a for loop over all rows of "input"
 
-    # observations = my_simulator(input, fidelity)
     observations = dgtd_simulator(input, fidelity)
 
     # Print only EGO phase :
@@ -570,10 +609,10 @@ def observer(x):
         print(f"x: \n {input[:]}")
         print(f" value: \n {observations[:]}")
 
-    filename = "data.pickle"
-
-    with open(filename, 'wb') as file :
-        pickle.dump(trieste.data.Dataset(x, observations), file)
+    #  Sauvegardés data : [Done in dgtd_simulator]
+    # filename = "data.pickle"
+    # with open(filename, 'wb') as file :
+    #     pickle.dump(trieste.data.Dataset(x, observations), file)
 
     return trieste.data.Dataset(x, observations)
 
@@ -591,20 +630,43 @@ tf.random.set_seed(my_seed)
 #################################
 tic = time.time()
 
+##DOE phase :
 input_search_space = trieste.space.Box(lb, ub)
 fidelity_search_space = trieste.space.DiscreteSearchSpace(np.array([0., 1., 2.]).reshape(-1, 1))
 search_space = trieste.space.TaggedProductSearchSpace([input_search_space, fidelity_search_space],
                                                       ["input", "fidelity"])
-#Non-nested initial data : ---------------------------------------------------------------------
-X = input_search_space.sample_sobol(init_low)
-initial_sample_low = tf.concat([X,tf.zeros([init_low,1],tf.double)],1)
-X =input_search_space.sample_sobol(init_medium)
-initial_sample_medium = tf.concat([X,tf.ones([init_medium,1],tf.double)],1)
-X =input_search_space.sample_sobol(init_high)
-initial_sample_high = tf.concat([X,2*tf.ones([init_high,1],tf.double)],1)
-initial_sample = tf.concat([initial_sample_low,initial_sample_medium,initial_sample_high],0)
+#Non-nested DOE PHASE : -----------------------------------------------------------------
+if history_data==True :
+    filename = "data/data.pickle"+str(counter)
+    with open(filename, 'rb') as file:
+        dataset = pickle.load(file)
+    best_value=np.min(dataset.observations)
+    initial_sample=dataset.query_points
+    initial_data=dataset
 
-# #Nested initial data : --------------------------------------------------------------------------
+else :
+    # New data files:
+    if os.path.isfile("observation.txt"):
+        subprocess.run("rm observation.txt", shell=True)
+    if os.path.exists("data"):
+        subprocess.run("rm -r data", shell=True)
+    if os.path.exists("observations"):
+        subprocess.run("rm -r observations", shell=True)
+    subprocess.run("mkdir data", shell=True)
+    subprocess.run("mkdir observations", shell=True)
+
+    X = input_search_space.sample_sobol(init_low)
+    initial_sample_low = tf.concat([X,tf.zeros([init_low,1],tf.double)],1)
+    X =input_search_space.sample_sobol(init_medium)
+    initial_sample_medium = tf.concat([X,tf.ones([init_medium,1],tf.double)],1)
+    X =input_search_space.sample_sobol(init_high)
+    initial_sample_high = tf.concat([X,2*tf.ones([init_high,1],tf.double)],1)
+
+    initial_sample = tf.concat([initial_sample_low,initial_sample_medium,initial_sample_high],0)
+    initial_data = observer(initial_sample)
+
+
+# Classical Nested DOE PHASE : -----------------------------------------------------------------
 # np.random.seed(35)
 # tf.random.set_seed(35)
 #
@@ -621,12 +683,8 @@ initial_sample = tf.concat([initial_sample_low,initial_sample_medium,initial_sam
 # initial_sample = tf.concat(initial_samples_list, 0)
 # #-------------------------------------------------------------------------------------------------
 
-initial_data = observer(initial_sample)
+
 num_fidelities=int(tf.reduce_max(initial_sample[:,-1]).numpy()+1)
-# print(f"#### DOE phase :")
-# print(f"level: {initial_sample[..., -1:]}")
-# print(f"x: \n {initial_sample[..., :-1]}")
-# print(f"observations : \n {initial_data.observations}")
 likelihood_value=1e-5
 
 lowfi_points, medfi_points, highfi_points, lowfi_mask, medfi_mask, highfi_mask, ind_lowfi, ind_medfi, ind_highfi = filter_by_fidelity(initial_data.query_points)
