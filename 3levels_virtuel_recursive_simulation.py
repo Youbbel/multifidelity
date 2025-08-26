@@ -42,7 +42,7 @@ import pickle
 from collections import deque
 import time
 
-os.chdir('/user/abellouc/home/Post-Doc/multi_fidelity/simulation/tree_fidelities/@local_3level_fidelities_v1')
+os.chdir('/user/abellouc/home/Post-Doc/multi_fidelity/simulation/tree_fidelities_MI/@local_3level_fidelities_v1')
 
 OBJECTIVE = "OBJECTIVE"
 
@@ -71,9 +71,9 @@ lb = np.array([90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0])
 ub = np.array([200.0, 200.0, 200.0, 200.0, 200.0, 200.0, 200.0])
 
 # size of initial dataset
-init_low = 15
-init_medium=10
-init_high = 5
+init_low = 1
+init_medium=1
+init_high = 1
 
 # CPU costs
 low_cost = 1.0
@@ -81,7 +81,7 @@ medium_cost = 2.0
 high_cost = 4.0
 
 # number of iterations
-num_steps=10
+num_steps=0
 
 
 
@@ -504,9 +504,9 @@ def dgtd_simulator(x_input, fidelity):
 
     for i in range(size):
 
-        f_out = open("metasurface.params", "w")
-        np.savetxt(f_out, x_input[i])
-        f_out.close()
+        #f_out = open("metasurface.params", "w")
+        #np.savetxt(f_out, x_input[i])
+        #f_out.close()
 
         global counter
         counter+=1
@@ -540,10 +540,17 @@ def dgtd_simulator(x_input, fidelity):
 
 
         if timelines[4]=='Computation successful\n' : # Si la simulation est faite :
-            value =1-read_data_pff("periodicFF_T_P2")
+            if fidelity[i] == 0:
+                value =1-read_data_pff("periodicFF_T_P2")
+                subprocess.run(f"cp T_P2 observations/T_P2_id{counter}", shell=True)
+                subprocess.run(f"cp R_P2 observations/R_P2_id{counter}", shell=True)
+                subprocess.run(f"cp periodicFF_T_P2 observations/periodicFF_T_P2_id{counter}", shell=True)
+            else :
+                value =1-read_data_pff("periodicFF_T_P2")
+                subprocess.run(f"cp T_P2 observations/T_P2_id{counter}", shell=True)
+                subprocess.run(f"cp R_P2 observations/R_P2_id{counter}", shell=True)
+                subprocess.run(f"cp periodicFF_T_P2 observations/periodicFF_T_P2_id{counter}", shell=True)
 
-            subprocess.run(f"cp T_P2 observations/T_P2_id{counter}", shell=True)
-            subprocess.run(f"cp R_P2 observations/R_P2_id{counter}", shell=True)
         else :
             value=1.0001 #Penalisation:
             timelines[0]= 'Wall time     :     no time \n'
