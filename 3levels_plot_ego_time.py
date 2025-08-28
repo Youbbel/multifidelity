@@ -50,8 +50,9 @@ file_time='observation.txt'
 DOE_bf=40
 DOE_mf=25
 DOE_hf=10
-DOE=DOE_bf+DOE_mf*2+DOE_hf*3
+EGO_phase=250
 
+n_iter=DOE_bf+DOE_hf+DOE_mf+EGO_phase
 
 with open(filename, 'rb') as file:
     dataset = pickle.load(file)
@@ -61,21 +62,9 @@ with open(file_time, 'r') as file:
 
 import re
 wall_times = re.findall(r'Wall time\s*:\s*([\d.]+)', content)
+
 wall_times = [float(time) for time in wall_times]
-#wall_times = wall_times[-(DOE_bf+DOE_hf+DOE_mf+EGO_phase)*2:]
-n_iter=len(wall_times)//2
-EGO_phase=n_iter-DOE
-
-objective = re.findall(r'Objective value\s*:\s*([\d.]+)', content)
-objective = [float(obj) for obj in objective]
-objective = np.array(objective)
-
-best = re.findall(r'Best value\s*:\s*([\d.]+)', content)
-best = [float(va) for va in best]
-best = np.array(best)
-
-fidelity = re.findall(r'Fidelity\s*:\s*([\d.]+)', content)
-fidelity = [float(fe) for fe in fidelity]
+wall_times = wall_times[-(DOE_bf+DOE_hf+DOE_mf+EGO_phase)*2:]
 
 total_time_seconds = sum(wall_times)
 
@@ -89,38 +78,30 @@ cum_time=cum_time/3600
 time_iter=time_iter/3600
 total_time=total_time_seconds/3600
 
+def filter_by_fidelity(query_points: TensorType):
 
-lowfi_mask = (np.array([fidelity])==0)
-ind_lowfi = np.where(lowfi_mask==True)[1]
+    input_points = query_points[:, :-1]  # [..., D+1]
+    fidelities = query_points[:, -1:]  # [..., 1]
 
-medfi_mask = (np.array([fidelity])==1)
-ind_medfi = np.where(medfi_mask==True)[1]
+    lowfi_mask = (fidelities[:, 0] == 0.)
+    ind_lowfi = tf.where(lowfi_mask)[:, 0]
 
-highfi_mask = (np.array([fidelity])==2)
-ind_highfi = np.where(highfi_mask==True)[1]
+    medfi_mask = (fidelities[:, 0] == 1.)
+    ind_medfi = tf.where(medfi_mask)[:, 0]
 
-# def filter_by_fidelity(query_points: TensorType):
-#
-#     input_points = query_points[:, :-1]  # [..., D+1]
-#     fidelities = query_points[:, -1:]  # [..., 1]
-#
-#     lowfi_mask = (fidelities[:, 0] == 0.)
-#     ind_lowfi = tf.where(lowfi_mask)[:, 0]
-#
-#     medfi_mask = (fidelities[:, 0] == 1.)
-#     ind_medfi = tf.where(medfi_mask)[:, 0]
-#
-#     highfi_mask = (fidelities[:, 0] == 2.)
-#     ind_highfi = tf.where(highfi_mask)[:, 0]
-#
-#     lowfi_points = tf.gather(input_points, ind_lowfi, axis=0)
-#     medfi_points = tf.gather(input_points, ind_medfi, axis=0)
-#     highfi_points = tf.gather(input_points, ind_highfi, axis=0)
-#     return lowfi_points, medfi_points, highfi_points, lowfi_mask, medfi_mask, highfi_mask, ind_lowfi, ind_medfi, ind_highfi
-#
-# lowfi_points, medfi_points, highfi_points, lowfi_mask, medfi_mask, highfi_mask, ind_lowfi, ind_medfi, ind_highfi = filter_by_fidelity(dataset.query_points)
+    highfi_mask = (fidelities[:, 0] == 2.)
+    ind_highfi = tf.where(highfi_mask)[:, 0]
 
-obj_best=objective[ind_highfi]
+    lowfi_points = tf.gather(input_points, ind_lowfi, axis=0)
+    medfi_points = tf.gather(input_points, ind_medfi, axis=0)
+    highfi_points = tf.gather(input_points, ind_highfi, axis=0)
+    return lowfi_points, medfi_points, highfi_points, lowfi_mask, medfi_mask, highfi_mask, ind_lowfi, ind_medfi, ind_highfi
+
+
+
+lowfi_points, medfi_points, highfi_points, lowfi_mask, medfi_mask, highfi_mask, ind_lowfi, ind_medfi, ind_highfi = filter_by_fidelity(dataset.query_points)
+
+obj_best=tf.gather(dataset.observations, ind_highfi)[DOE_hf:]
 
 minvalue=np.zeros(len(obj_best))
 for i in range(len(obj_best)):
@@ -129,19 +110,20 @@ for i in range(len(obj_best)):
 # Plot the minvalue until the end
 last_ind = tf.constant([DOE_bf+DOE_mf+DOE_hf+EGO_phase-1], dtype=tf.int64)
 minvalue_ind = tf.concat([ind_highfi[DOE_hf:], last_ind], axis=0)
-minvalue= np.append(minvalue,min(obj_best[:]))
+minvalue= tf.concat([minvalue, min(obj_best[:])], axis=0)
+print('effiency :',100*(1-minvalue[-1].numpy()),'%')
 
 plt.figure(1)
 plt.xlabel(r'Computation time [h]')
 plt.ylabel(r'Objective function')
 
-plt.plot(cum_time[ind_lowfi[:DOE_bf]],objective[ind_lowfi][:DOE_bf],'x',color='blue', markersize=4)#,label='DOE LF')
-plt.plot(cum_time[ind_medfi[:DOE_mf]],objective[ind_medfi][:DOE_mf],'x',color='darkgreen', markersize=4)#,label='DOE LF')
-plt.plot(cum_time[ind_highfi[:DOE_hf]],objective[ind_highfi][:DOE_hf],'x',color='red', markersize=4)#,label='DOE HF')
+plt.plot(cum_time[ind_lowfi[:DOE_bf]],tf.gather(dataset.observations, ind_lowfi)[:DOE_bf],'x',color='blue', markersize=4)#,label='DOE LF')
+plt.plot(cum_time[ind_medfi[:DOE_mf]],tf.gather(dataset.observations, ind_medfi)[:DOE_mf],'x',color='darkgreen', markersize=4)#,label='DOE LF')
+plt.plot(cum_time[ind_highfi[:DOE_hf]],tf.gather(dataset.observations, ind_highfi)[:DOE_hf],'x',color='red', markersize=4)#,label='DOE HF')
 
-plt.plot(cum_time[ind_lowfi[DOE_bf:]],objective[ind_lowfi][DOE_bf:],'o',color='blue', label='LF', markersize=6)#,markeredgecolor='black')
-plt.plot(cum_time[ind_medfi[DOE_mf:]],objective[ind_medfi][DOE_mf:],'o',color='darkgreen', label='MF', markersize=6)#,markeredgecolor='black')
-plt.plot(cum_time[ind_highfi[DOE_hf:]],objective[ind_highfi][DOE_hf:],'o',color='red', label='HF', markersize=6)#,markeredgecolor='black')
+plt.plot(cum_time[ind_lowfi[DOE_bf:]],tf.gather(dataset.observations, ind_lowfi)[DOE_bf:],'o',color='blue', label='LF', markersize=6)#,markeredgecolor='black')
+plt.plot(cum_time[ind_medfi[DOE_mf:]],tf.gather(dataset.observations, ind_medfi)[DOE_mf:],'o',color='darkgreen', label='MF', markersize=6)#,markeredgecolor='black')
+plt.plot(cum_time[ind_highfi[DOE_hf:]],tf.gather(dataset.observations, ind_highfi)[DOE_hf:],'o',color='red', label='HF', markersize=6)#,markeredgecolor='black')
 #plt.plot(minvalue_ind[:],minvalue[:],'-',color='red',label='min value MF')
 
 
@@ -149,18 +131,17 @@ print('Nombre de simulation LF:', len(ind_lowfi[DOE_bf:]))
 print('Nombre de simulation MF:', len(ind_medfi[DOE_mf:]))
 print('Nombre de simulation HF:', len(ind_highfi[DOE_hf:]))
 
-plt.plot(cum_time[minvalue_ind[:]],minvalue[DOE_hf:],'-',color='red',label='min value MF')
-#plt.plot(cum_time[DOE:],best[DOE:],'-',color='red',label='min value HF')
+plt.plot(cum_time[minvalue_ind[:]],minvalue[:],'-',color='red',label='min value HF')
 
 
 #plt.fill_between([0,cum_time[DOE_bf]], [1.005,1.005], color='blue', alpha=0.1)
 plt.fill_between([0,cum_time[DOE_bf+DOE_mf+DOE_hf]], [1.005,1.005], color='violet', alpha=0.3)
 
 import matplotlib.patheffects as path_effects
-#text = plt.text(cum_time[DOE_bf+DOE_mf+DOE_hf+EGO_phase-70], minvalue[-1]-0.11, r'min J$_{HF}=$ '+str(np.round(minvalue[-1],3)), fontsize = 14, color='red')
+text = plt.text(cum_time[DOE_bf+DOE_mf+DOE_hf+EGO_phase-70], minvalue[-1]-0.11, r'min J$_{HF}=$ '+str(np.round(minvalue[-1],3)), fontsize = 14, color='red')
 
-# text.set_path_effects([path_effects.Stroke(linewidth=0.05, foreground='black'),
-#                        path_effects.Normal()])
+text.set_path_effects([path_effects.Stroke(linewidth=0.05, foreground='black'),
+                       path_effects.Normal()])
 
 plt.text(cum_time[DOE_bf+DOE_mf+DOE_hf-69], 0.005, r'DOE MF', fontsize = 14, color='black', alpha=0.5)
 
